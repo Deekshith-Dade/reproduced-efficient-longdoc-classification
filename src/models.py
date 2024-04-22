@@ -1,5 +1,5 @@
 import torch
-from transformers import LongformerModel, BertModel
+from transformers import LongformerModel, BertModel, GPT2Config, GPT2ForSequenceClassification, DistilBertForSequenceClassification
 import torch.nn.functional as F
 import numpy as np
 
@@ -94,4 +94,30 @@ class ToBERTModel(torch.nn.Module):
         relu_output = F.relu(fc_output)
         logits = self.classifier(relu_output)
 
+        return logits
+    
+
+class GPT2Classifier(torch.nn.Module):
+    def __init__(self, num_labels):
+        super(GPT2Classifier, self).__init__()
+        self.model_name_or_path = 'gpt2'
+        model_config = GPT2Config.from_pretrained(pretrained_model_name_or_path=self.model_name_or_path, num_labels=num_labels)
+
+        self.gpt2 = GPT2ForSequenceClassification.from_pretrained(pretrained_model_name_or_path=self.model_name_or_path, config=model_config)
+
+        # fix model padding token id
+        self.gpt2.config.pad_token_id = self.gpt2.config.eos_token_id
+
+    def forward(self, ids, mask, token_type_ids):
+        logits, _ = self.gpt2(input_ids=ids, attention_mask=mask, token_type_ids=token_type_ids, return_dict=False)
+        return logits
+
+class DistilBertClass(torch.nn.Module):
+    def __init__(self, num_labels):
+        super(DistilBertClass, self).__init__()
+        self.model_name_or_path = "distilbert-base-uncased"
+        self.distilBERT = DistilBertForSequenceClassification.from_pretrained("distilbert-base-uncased", num_labels=num_labels)
+    
+    def forward(self, ids, mask, token_type_ids):
+        logits, = self.distilBERT(input_ids=ids, attention_mask=mask, return_dict=False)
         return logits

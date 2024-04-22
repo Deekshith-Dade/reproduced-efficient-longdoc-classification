@@ -15,7 +15,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch import cuda
 from torch.utils.data import DataLoader
-from transformers import LongformerTokenizer, BertTokenizer
+from transformers import LongformerTokenizer, BertTokenizer, GPT2Tokenizer, DistilBertTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
@@ -99,12 +99,16 @@ class Classification(pl.LightningModule):
         self.dataset_size = dataset_size
         self.epochs = epochs
         self.batch_size = batch_size
+        self.validation_step_outs = []
+        self.test_step_outs = []
+
+
         if self.label_type == 'binary_class':
-            self.eval_metric = torchmetrics.Accuracy(num_classes=self.num_labels)
+            self.eval_metric = torchmetrics.Accuracy(task='binary')
         elif self.label_type == 'multi_label':
-            self.eval_metric = torchmetrics.F1(num_classes=self.num_labels, average='micro')
+            self.eval_metric = torchmetrics.F1Score(num_labels=self.num_labels, average='micro', task='multilabel')
         elif self.label_type == 'multi_class':
-            self.eval_metric = torchmetrics.Accuracy(num_classes=self.num_labels, multiclass=True)
+            self.eval_metric = torchmetrics.Accuracy(num_classes=self.num_labels, task='multiclass')
 
     def training_step(self, batch, batch_idx):
         start = time.time()
@@ -149,7 +153,6 @@ class Classification(pl.LightningModule):
 
         self.log('train_eval_metric', self.eval_metric(preds, y), on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        self.log('losses', {'train_loss': loss}, on_step=False, on_epoch=True, prog_bar=False, logger=True)
         self.log('train_time', time.time() - start, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
         return metrics
@@ -198,14 +201,20 @@ class Classification(pl.LightningModule):
         metrics['preds'] = preds
         metrics['y'] = y
 
+        self.validation_step_outs.append(metrics)
+        
+
         self.log(prefix + 'eval_metric', self.eval_metric(preds, y), on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log(prefix + 'loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        self.log('losses', {prefix + 'loss': loss}, on_step=False, on_epoch=True, prog_bar=False, logger=True)
         self.log(prefix + 'time', time.time() - start, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
         return metrics
 
-    def validation_epoch_end(self, outputs, prefix='val_'):
+    def on_validation_epoch_end(self, prefix='val_'):
+        if prefix == 'val_':
+            outputs = self.validation_step_outs
+        elif prefix == 'test_':
+            outputs = self.test_step_outs
         labels = []
         predictions = []
         for output in outputs:
@@ -230,30 +239,46 @@ class Classification(pl.LightningModule):
 
         logging.info(
             prefix + 'accuracy: {}'.format(accuracy_score(y_true, y_pred_labels)))
+        
+        print(prefix + 'accuracy: {}'.format(accuracy_score(y_true, y_pred_labels)))
 
         if self.label_type == 'binary_class':
             average_type = 'macro'
-            logging.info(prefix + average_type + '_precision: {}'.format(precision_score(y_true, y_pred_labels, average=average_type)))
+            logging.info(prefix + average_type + '_precision: {}'.format(precision_score(y_true, y_pred_labels, average=average_type,zero_division=0)))
             logging.info(
-                prefix + average_type + '_recall: {}'.format(recall_score(y_true, y_pred_labels, average=average_type)))
+                prefix + average_type + '_recall: {}'.format(recall_score(y_true, y_pred_labels, average=average_type,zero_division=0)))
             logging.info(
-                prefix + average_type + '_f1: {}'.format(f1_score(y_true, y_pred_labels, average=average_type)))
+                prefix + average_type + '_f1: {}'.format(f1_score(y_true, y_pred_labels, average=average_type,zero_division=0)))
+            
+            # print(prefix + average_type + '_precision: {}'.format(precision_score(y_true, y_pred_labels, average=average_type,zero_division=0)))
+            # print(prefix + average_type + '_recall: {}'.format(recall_score(y_true, y_pred_labels, average=average_type,zero_division=0)))
+            print(prefix + average_type + '_f1: {}'.format(f1_score(y_true, y_pred_labels, average=average_type,zero_division=0)))
 
         else:
             for average_type in ['micro', 'macro', 'weighted']:
-                logging.info(prefix + average_type + '_precision: {}'.format(precision_score(y_true, y_pred_labels, average=average_type)))
+                logging.info(prefix + average_type + '_precision: {}'.format(precision_score(y_true, y_pred_labels, average=average_type,zero_division=0)))
                 logging.info(
-                    prefix + average_type + '_recall: {}'.format(recall_score(y_true, y_pred_labels, average=average_type)))
+                    prefix + average_type + '_recall: {}'.format(recall_score(y_true, y_pred_labels, average=average_type,zero_division=0)))
                 logging.info(
-                    prefix + average_type + '_f1: {}'.format(f1_score(y_true, y_pred_labels, average=average_type)))
+                    prefix + average_type + '_f1: {}'.format(f1_score(y_true, y_pred_labels, average=average_type,zero_division=0)))
+                
+                # print(prefix + average_type + '_precision: {}'.format(precision_score(y_true, y_pred_labels, average=average_type,zero_division=0)))
+                # print(prefix + average_type + '_recall: {}'.format(recall_score(y_true, y_pred_labels, average=average_type,zero_division=0)))
+                print(prefix + average_type + '_f1: {}'.format(f1_score(y_true, y_pred_labels, average=average_type,zero_division=0)))
+        
+        self.validation_step_outs.clear()
+
 
 
     def test_step(self, batch, batch_idx):
         metrics = self.validation_step(batch, batch_idx, 'test_')
+        self.test_step_outs.append(metrics)
         return metrics
 
-    def test_epoch_end(self, outputs):
-        self.validation_epoch_end(outputs, prefix="test_")
+    def on_test_epoch_end(self):
+        self.on_validation_epoch_end(prefix="test_")
+        self.test_step_outs.clear()
+
 
     def configure_optimizers(self):
         opt = {}
@@ -268,8 +293,9 @@ class Classification(pl.LightningModule):
             )
             opt['lr_scheduler'] = scheduler
             return opt
-
-if __name__ == "__main__":
+        
+def main():
+    
     warnings.simplefilter(action='ignore', category=FutureWarning)  # ignore future warnings
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_name', type=str, required=True,
@@ -281,8 +307,8 @@ if __name__ == "__main__":
     parser.add_argument('--epochs', type=int, required=True, help="Number of epochs")
     parser.add_argument("--scheduler", action='store_true', help="Use a warmup scheduler with warmup steps of 0.1 of "
                                                                  "the total training steps")
-    parser.add_argument("--num_workers", type=int, default=0, help="Number of data loader workers")
-    parser.add_argument('--model_dir', type=str, default='./ckpts/', help="Path to save the best model")
+    parser.add_argument("--num_workers", type=int, default=4, help="Number of data loader workers")
+    parser.add_argument('--model_dir', type=str, default='/scratch/general/vast/u1471448/ckpts/', help="Path to save the best model")
     parser.add_argument("--seed", type=int, default=3456, help="Random seed")
     parser.add_argument("--inverted", action='store_true', help="Use the Inverted EURLEX dataset")
     parser.add_argument("--pairs", action='store_true', help="Use the Paired Book Summary dataset")
@@ -291,6 +317,8 @@ if __name__ == "__main__":
                                                  "e.g. bert_hyperpartisan_b8_e20_s3456_lr3e-05--epoch=17.ckpt")
 
     args = parser.parse_args()
+
+    
 
     device = 'cuda' if cuda.is_available() else 'cpu'
     # sets seeds for numpy, torch, python.random and PYTHONHASHSEED
@@ -322,6 +350,19 @@ if __name__ == "__main__":
     if args.model_name.lower() == 'longformer':
         tokenizer = LongformerTokenizer.from_pretrained('allenai/longformer-base-4096', do_lower_case=True)
         max_length = 4096
+    elif args.model_name.lower() == 'gpt2':
+        print('Loading tokenizer...')
+        model_name_or_path = 'gpt2'
+        tokenizer = GPT2Tokenizer.from_pretrained(pretrained_model_name_or_path=model_name_or_path)
+        # default to left padding
+        tokenizer.padding_side = "left"
+        # Define PAD Token = EOS Token = 50256
+        tokenizer.pad_token = tokenizer.eos_token
+        max_length = 512
+    
+    elif args.model_name.lower() == 'distilbert':
+        tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
+        max_length = 512
     else:
         tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True)
         max_length = 512
@@ -346,6 +387,14 @@ if __name__ == "__main__":
         max_length = 200 # divide documents into chunks up to 200 tokens
         model = models.ToBERTModel(num_labels, device)
         dataset_class = datasets.ChunkDataset
+    
+    elif args.model_name.lower() == 'gpt2':
+        model = models.GPT2Classifier(num_labels=num_labels)
+        dataset_class = datasets.TruncatedDataset
+
+    elif args.model_name.lower() == 'distilbert':
+        model = models.DistilBertClass(num_labels=num_labels)
+        dataset_class = datasets.TruncatedDataset
 
     else:
         raise Exception("Model not found: {}".format(args.model_name))
@@ -382,54 +431,59 @@ if __name__ == "__main__":
     if not args.eval: # train mode
         ckpt_config = ModelCheckpoint(
             monitor="val_eval_metric_epoch",
-            verbose=False,
+            verbose=True,
             save_top_k=1,
             save_weights_only=False,
             mode='max',
-            every_n_val_epochs=1,
+            every_n_epochs=1,
             dirpath=args.model_dir,
             filename=output_model_name + "--{epoch}"
         )
         if args.ckpt:
             trainer = pl.Trainer(logger=logger,
                                  callbacks=ckpt_config,
-                                 gpus=1,
+                                 accelerator='gpu',
+                                #  strategy='ddp',
+                                 devices=1,
                                  deterministic=True,
-                                 log_gpu_memory='min_max',
                                  num_sanity_val_steps=0,
                                  max_epochs=args.epochs,
-                                 resume_from_checkpoint=args.model_dir + args.ckpt)
+                                 log_every_n_steps=1,
+                                 )
 
         else:
             trainer = pl.Trainer(logger=logger,
                                  callbacks=ckpt_config,
-                                 gpus=1,
+                                 accelerator='gpu',
+                                #  strategy='ddp',
+                                 devices=1,
                                  deterministic=True,
-                                 log_gpu_memory='min_max',
                                  num_sanity_val_steps=0,
+                                 log_every_n_steps=1,
                                  max_epochs=args.epochs)
 
         print("Training: {}".format(output_model_name))
-        trainer.fit(model=task, train_dataloader=dataloaders['train'], val_dataloaders=dataloaders['dev'])
+        trainer.fit(model=task, train_dataloaders=dataloaders['train'], val_dataloaders=dataloaders['dev'], ckpt_path=args.model_dir + args.ckpt if args.ckpt else None)
 
         for _ckpt in range(len(trainer.checkpoint_callbacks)):
             logging.info("Testing")
             paths = trainer.checkpoint_callbacks[_ckpt]
             ckpt_path = trainer.checkpoint_callbacks[_ckpt].best_model_path
             logging.info("Checkpoint path: {}".format(ckpt_path))
-            metrics = trainer.test(test_dataloaders=dataloaders['test'], ckpt_path=ckpt_path)
+            metrics = trainer.test(dataloaders=dataloaders['test'], ckpt_path=ckpt_path)
             for metric in metrics:
                 for key in metric:
                     logging.info("{}: {}".format(key, metric[key]))
 
             for split in ['dev', 'test']:
                 logging.info("Evaluating on long documents in the {} set only".format(split))
-                metrics = trainer.test(test_dataloaders=long_dataloaders[split], ckpt_path=ckpt_path)
+                metrics = trainer.test(dataloaders=long_dataloaders[split], ckpt_path=ckpt_path)
                 for metric in metrics:
                     for key in metric:
                         logging.info("long_{}_{}: {}".format(split, key, metric[key]))
 
     else: # eval mode
+        print("EVAL MODE")
         if args.ckpt:
             ckpt_paths = glob.glob(args.model_dir + args.ckpt)
         else:
@@ -457,3 +511,6 @@ if __name__ == "__main__":
                 for metric in metrics:
                     for key in metric:
                         logging.info("long_{}_{}: {}".format(split, key, metric[key]))
+
+if __name__ == "__main__":
+    main()
